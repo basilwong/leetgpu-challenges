@@ -10,14 +10,18 @@ from __future__ import annotations
 
 import argparse
 import ast
+import copy
 from contextlib import contextmanager
 import hashlib
 import importlib.util
 import json
 import math
+import multiprocessing
+import queue
 import sys
 import threading
 import time
+import traceback
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -30,6 +34,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CHALLENGES_ROOT = REPO_ROOT / "challenges"
 DEMO_ROOT = REPO_ROOT / "demo"
 TENSOR_PREVIEW_LIMIT = 32
+MAX_SOLUTION_CODE_BYTES = 100_000
+SOLUTION_TIMEOUT_SECONDS = 15
 RUN_LOCK = threading.Lock()
 
 
@@ -231,10 +237,184 @@ def run_example(challenge_info: ChallengeInfo) -> dict[str, Any]:
     }
 
 
+def clone_test_value(value: Any, torch: Any) -> Any:
+    """Clone generated test data so reference and submitted code cannot share state."""
+    if torch.is_tensor(value):
+        return value.detach().clone()
+    try:
+        return copy.deepcopy(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def clone_test_case(test_case: dict[str, Any], torch: Any) -> dict[str, Any]:
+    return {name: clone_test_value(value, torch) for name, value in test_case.items()}
+
+
+def output_names_for(challenge: Any) -> list[str]:
+    return [
+        name
+        for name, parameter in challenge.get_solve_signature().items()
+        if isinstance(parameter, tuple) and len(parameter) > 1 and parameter[1] in {"out", "inout"}
+    ]
+
+
+def compare_outputs(
+    expected_case: dict[str, Any],
+    submitted_case: dict[str, Any],
+    output_names: list[str],
+    submitted_return: Any,
+    challenge: Any,
+    torch: Any,
+) -> None:
+    """Assert that the submitted output buffers match the reference output buffers."""
+    for output_name in output_names:
+        expected = expected_case[output_name]
+        submitted = submitted_case[output_name]
+        try:
+            torch.testing.assert_close(
+                submitted,
+                expected,
+                rtol=challenge.rtol,
+                atol=challenge.atol,
+                check_device=False,
+                check_dtype=False,
+                equal_nan=True,
+            )
+        except AssertionError:
+            # Let a PyTorch solution return its single result instead of writing
+            # in-place, which is convenient for local experimentation.
+            if len(output_names) != 1 or submitted_return is None:
+                raise
+            torch.testing.assert_close(
+                submitted_return,
+                expected,
+                rtol=challenge.rtol,
+                atol=challenge.atol,
+                check_device=False,
+                check_dtype=False,
+                equal_nan=True,
+            )
+
+
+def validate_solution_in_process(challenge_info: ChallengeInfo, source_code: str) -> dict[str, Any]:
+    """Run a submitted PyTorch ``solve`` function against all functional tests."""
+    import torch
+
+    namespace: dict[str, Any] = {"__name__": "__local_solution__", "torch": torch}
+    exec(compile(source_code, "<local PyTorch solution>", "exec"), namespace)
+    solve = namespace.get("solve")
+    if not callable(solve):
+        raise ValueError("Define a callable `solve(...)` function before validating.")
+
+    with emulate_uint32_when_needed(challenge_info, torch) as uint32_emulated:
+        challenge = load_challenge(challenge_info)
+        test_cases = challenge.generate_functional_test()
+        if not isinstance(test_cases, list):
+            raise TypeError("generate_functional_test() must return a list of test cases")
+        output_names = output_names_for(challenge)
+        started = time.perf_counter()
+
+        for test_number, test_case in enumerate(test_cases, start=1):
+            if not isinstance(test_case, dict):
+                raise TypeError(f"Functional test {test_number} is not a dictionary")
+            expected_case = clone_test_case(test_case, torch)
+            submitted_case = clone_test_case(test_case, torch)
+            execute_reference(challenge_info, challenge, expected_case, uint32_emulated)
+            try:
+                submitted_return = solve(**submitted_case)
+                compare_outputs(
+                    expected_case,
+                    submitted_case,
+                    output_names,
+                    submitted_return,
+                    challenge,
+                    torch,
+                )
+            except Exception as error:
+                return {
+                    "passed": False,
+                    "passed_tests": test_number - 1,
+                    "total_tests": len(test_cases),
+                    "failure": f"Test {test_number}: {error}",
+                    "elapsed_ms": round((time.perf_counter() - started) * 1_000, 3),
+                    "execution_note": (
+                        "Unsigned 32-bit values are represented as int64 because "
+                        "this local PyTorch build does not provide torch.uint32."
+                        if uint32_emulated
+                        else "PyTorch functional tests on CPU."
+                    ),
+                }
+
+    return {
+        "passed": True,
+        "passed_tests": len(test_cases),
+        "total_tests": len(test_cases),
+        "elapsed_ms": round((time.perf_counter() - started) * 1_000, 3),
+        "execution_note": (
+            "Unsigned 32-bit values are represented as int64 because this local PyTorch build "
+            "does not provide torch.uint32."
+            if uint32_emulated
+            else "PyTorch functional tests on CPU."
+        ),
+    }
+
+
+def validation_worker(
+    challenge_info: ChallengeInfo, source_code: str, result_queue: multiprocessing.Queue
+) -> None:
+    """Send a serializable validation result from the time-limited child process."""
+    try:
+        result_queue.put(
+            {"ok": True, "result": validate_solution_in_process(challenge_info, source_code)}
+        )
+    except Exception:
+        result_queue.put(
+            {
+                "ok": False,
+                "error": traceback.format_exc(limit=5),
+            }
+        )
+
+
+def validate_solution(challenge_info: ChallengeInfo, source_code: str) -> dict[str, Any]:
+    """Validate local user code in a child process and enforce a wall-clock timeout."""
+    if not source_code.strip():
+        raise ValueError("Enter a PyTorch `solve(...)` function before validating.")
+    if len(source_code.encode("utf-8")) > MAX_SOLUTION_CODE_BYTES:
+        raise ValueError(f"Solution code must be at most {MAX_SOLUTION_CODE_BYTES:,} bytes.")
+
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(
+        target=validation_worker, args=(challenge_info, source_code, result_queue)
+    )
+    process.start()
+    process.join(SOLUTION_TIMEOUT_SECONDS)
+    if process.is_alive():
+        process.terminate()
+        process.join()
+        raise TimeoutError(
+            f"Validation exceeded the {SOLUTION_TIMEOUT_SECONDS}-second local CPU time limit."
+        )
+
+    try:
+        worker_result = result_queue.get(timeout=1)
+    except queue.Empty as error:
+        raise RuntimeError("The validation process exited without returning a result.") from error
+    finally:
+        result_queue.close()
+
+    if not worker_result["ok"]:
+        raise RuntimeError(worker_result["error"])
+    return worker_result["result"]
+
+
 class DemoRequestHandler(SimpleHTTPRequestHandler):
     """Serve the browser app plus a small local-only JSON API."""
 
     server_version = "LeetGPUCPUDemo/1.0"
+    max_request_body_bytes = MAX_SOLUTION_CODE_BYTES + 10_000
 
     @property
     def challenges(self) -> dict[str, ChallengeInfo]:
@@ -259,6 +439,21 @@ class DemoRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def read_json_body(self) -> dict[str, Any]:
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            raise ValueError("Content-Length must be an integer.") from error
+        if content_length < 0 or content_length > self.max_request_body_bytes:
+            raise ValueError("Request body is too large.")
+        try:
+            body = json.loads(self.rfile.read(content_length))
+        except json.JSONDecodeError as error:
+            raise ValueError("Request body must be valid JSON.") from error
+        if not isinstance(body, dict):
+            raise ValueError("Request body must be a JSON object.")
+        return body
 
     def challenge_for_request(self, prefix: str, suffix: str = "") -> ChallengeInfo | None:
         requested = unquote(urlparse(self.path).path.removeprefix(prefix)).lstrip("/")
@@ -293,6 +488,7 @@ class DemoRequestHandler(SimpleHTTPRequestHandler):
                 self.send_json(HTTPStatus.NOT_FOUND, {"error": "Challenge not found"})
                 return
             description = challenge.path.with_name("challenge.html")
+            starter = challenge.path.parent / "starter" / "starter.pytorch.py"
             self.send_json(
                 HTTPStatus.OK,
                 {
@@ -305,6 +501,11 @@ class DemoRequestHandler(SimpleHTTPRequestHandler):
                         if description.exists()
                         else "<p>No challenge description is available in this checkout.</p>"
                     ),
+                    "starter_code": (
+                        starter.read_text(encoding="utf-8")
+                        if starter.exists()
+                        else "import torch\n\n\ndef solve(*args):\n    pass\n"
+                    ),
                 },
             )
             return
@@ -312,17 +513,37 @@ class DemoRequestHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if not path.startswith("/api/challenges/") or not path.endswith("/run-example"):
+        if not path.startswith("/api/challenges/"):
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
             return
 
-        challenge = self.challenge_for_request("/api/challenges/", suffix="/run-example")
+        if path.endswith("/run-example"):
+            challenge = self.challenge_for_request("/api/challenges/", suffix="/run-example")
+            if challenge is None:
+                self.send_json(HTTPStatus.NOT_FOUND, {"error": "Challenge not found"})
+                return
+            try:
+                self.send_json(HTTPStatus.OK, run_example(challenge))
+            except Exception as error:
+                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
+            return
+
+        if not path.endswith("/validate"):
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
+            return
+
+        challenge = self.challenge_for_request("/api/challenges/", suffix="/validate")
         if challenge is None:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "Challenge not found"})
             return
-
         try:
-            self.send_json(HTTPStatus.OK, run_example(challenge))
+            body = self.read_json_body()
+            source_code = body.get("code")
+            if not isinstance(source_code, str):
+                raise ValueError("Request field `code` must be a string.")
+            self.send_json(HTTPStatus.OK, validate_solution(challenge, source_code))
+        except (TimeoutError, ValueError) as error:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         except Exception as error:
             self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
 

@@ -9,9 +9,11 @@ Each challenge includes problem descriptions, reference implementation, test cas
 ## Local CPU Demo
 
 The repository includes a small browser playground for exploring the challenges in the
-currently checked-out branch. It runs only a challenge's example case through its
-PyTorch reference implementation on your CPU; it does not submit code, contact the
-LeetGPU service, or run the large performance tests.
+currently checked-out branch. It runs a challenge's example case through its PyTorch
+reference implementation on your CPU, and can validate a PyTorch `solve(...)`
+function against the functional test suite. It does not submit code, contact the
+LeetGPU service, or run the large performance tests. Submitted code runs locally, so
+only validate code you trust.
 
 ```bash
 python -m pip install -r scripts/requirements.txt

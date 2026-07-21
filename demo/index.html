@@ -55,15 +55,26 @@
       .content { min-width: 0; padding: clamp(22px, 4vw, 48px); }
       .empty { max-width: 650px; padding: 25px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
       .detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 22px; margin-bottom: 24px; }
+      .detail-actions { display: flex; flex-wrap: wrap; gap: 9px; }
       .source { margin: 7px 0 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; }
       .run-button { padding: 11px 15px; border: 1px solid #7794f8; border-radius: 8px; color: #06102a; background: var(--accent-strong); font-weight: 800; white-space: nowrap; }
       .run-button:hover { background: #c0cbff; }
       .run-button:disabled { cursor: wait; opacity: .7; }
+      .validate-button { color: var(--text); background: #27395f; border-color: #6385de; }
+      .validate-button:hover { background: #324a7a; }
       .notice { min-height: 22px; margin-bottom: 15px; color: var(--muted); font-size: .9rem; }
       .notice.success { color: var(--success); }
       .notice.error { color: var(--danger); }
       .results { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-bottom: 30px; }
       .result-panel { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+      .solution-panel { margin: 26px 0 30px; padding: 18px; border: 1px solid #3e5481; border-radius: 10px; background: var(--panel-strong); }
+      .solution-panel h3 { margin-bottom: 7px; }
+      .solution-panel p { color: var(--muted); font-size: .9rem; line-height: 1.5; }
+      .code-editor { width: 100%; min-height: 320px; resize: vertical; padding: 14px; color: #e2e9fb; background: #090d15; border: 1px solid #26334b; border-radius: 7px; tab-size: 4; font: .83rem/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .validation-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 12px; }
+      .validation-result { min-height: 22px; margin: 0; color: var(--muted); font-size: .9rem; white-space: pre-wrap; }
+      .validation-result.success { color: var(--success); }
+      .validation-result.error { color: var(--danger); }
       pre { margin: 0; padding: 12px; overflow: auto; color: #d7e0f6; background: #090d15; border: 1px solid #202a3c; border-radius: 7px; font: .78rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
       .challenge-content { line-height: 1.65; color: #d9e0ed; }
       .challenge-content h2 { margin: 28px 0 10px; color: var(--accent-strong); }
@@ -78,9 +89,20 @@
         .challenge-list { max-height: 255px; }
         .content { padding: 25px 20px; }
         .detail-header { display: block; }
-        .run-button { margin-top: 14px; }
+        .detail-actions { margin-top: 14px; }
+        .validation-footer { align-items: flex-start; flex-direction: column; }
       }
     </style>
+    <script>
+      window.MathJax = {
+        tex: {
+          inlineMath: [["\\(", "\\)"], ["$", "$"]],
+          displayMath: [["\\[", "\\]"], ["$$", "$$"]]
+        },
+        startup: { typeset: false }
+      };
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-mml-chtml.js" onload="window.dispatchEvent(new Event('mathjax-ready'))"></script>
   </head>
   <body>
     <header>
@@ -104,7 +126,7 @@
       </section>
     </main>
     <script>
-      const state = { challenges: [], activeId: null, detail: null };
+      const state = { challenges: [], activeId: null, detail: null, solutions: {} };
       const content = document.querySelector("#content");
       const list = document.querySelector("#challenge-list");
       const count = document.querySelector("#count");
@@ -114,6 +136,17 @@
         "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;"
       }[character]));
       const encodedId = (id) => encodeURIComponent(id);
+
+      function typesetMath(element) {
+        if (!element || typeof window.MathJax?.typesetPromise !== "function") return;
+        window.MathJax.typesetClear?.([element]);
+        window.MathJax.typesetPromise([element]).catch((error) => console.error("MathJax error", error));
+      }
+
+      function saveActiveSolution() {
+        const editor = document.querySelector("#solution-code");
+        if (editor && state.activeId) state.solutions[state.activeId] = editor.value;
+      }
 
       function filteredChallenges() {
         const term = search.value.trim().toLowerCase();
@@ -142,16 +175,35 @@
               <h2 style="margin: 10px 0 0">${escapeHtml(detail.name)}</h2>
               <p class="source">${escapeHtml(detail.source_path)}</p>
             </div>
-            <button id="run-example" class="run-button">Run CPU example</button>
+            <div class="detail-actions">
+              <button id="run-example" class="run-button">Run reference example</button>
+              <button id="validate-solution" class="run-button validate-button">Validate my PyTorch code</button>
+            </div>
           </div>
           <p id="notice" class="notice">Runs <code>generate_example_test()</code> and <code>reference_impl()</code> locally. Large functional and performance tests are not run.</p>
           <div id="results"></div>
+          <section class="solution-panel">
+            <h3>PyTorch solution</h3>
+            <p>Define <code>solve(...)</code> with the provided signature. Validation runs every functional test on CPU in a local child process with a 15-second limit. Only run code you trust.</p>
+            <textarea id="solution-code" class="code-editor" spellcheck="false" aria-label="PyTorch solution code"></textarea>
+            <div class="validation-footer">
+              <p id="validation-result" class="validation-result">Edit the starter, then validate against the functional test suite.</p>
+              <button id="validate-solution-bottom" class="run-button validate-button">Validate my code</button>
+            </div>
+          </section>
           <article class="challenge-content">${detail.description_html}</article>
         `;
+        const editor = document.querySelector("#solution-code");
+        editor.value = state.solutions[state.activeId] ?? detail.starter_code;
+        editor.addEventListener("input", saveActiveSolution);
         document.querySelector("#run-example").addEventListener("click", runExample);
+        document.querySelector("#validate-solution").addEventListener("click", validateSolution);
+        document.querySelector("#validate-solution-bottom").addEventListener("click", validateSolution);
+        typesetMath(document.querySelector(".challenge-content"));
       }
 
       async function selectChallenge(id) {
+        saveActiveSolution();
         state.activeId = id;
         state.detail = null;
         renderList();
@@ -194,7 +246,45 @@
         }
       }
 
+      async function validateSolution() {
+        const editor = document.querySelector("#solution-code");
+        const resultArea = document.querySelector("#validation-result");
+        const buttons = document.querySelectorAll("#validate-solution, #validate-solution-bottom");
+        saveActiveSolution();
+        buttons.forEach((button) => {
+          button.disabled = true;
+          button.textContent = "Validating…";
+        });
+        resultArea.className = "validation-result";
+        resultArea.textContent = "Running the functional test suite on cpu…";
+        try {
+          const response = await fetch(`/api/challenges/${encodedId(state.activeId)}/validate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: editor.value })
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || "Validation could not start.");
+          if (result.passed) {
+            resultArea.className = "validation-result success";
+            resultArea.textContent = `Passed all ${result.total_tests} functional tests in ${result.elapsed_ms} ms. ${result.execution_note}`;
+          } else {
+            resultArea.className = "validation-result error";
+            resultArea.textContent = `Passed ${result.passed_tests} of ${result.total_tests} tests in ${result.elapsed_ms} ms. ${result.failure}`;
+          }
+        } catch (error) {
+          resultArea.className = "validation-result error";
+          resultArea.textContent = error.message;
+        } finally {
+          buttons.forEach((button, index) => {
+            button.disabled = false;
+            button.textContent = index === 0 ? "Validate my PyTorch code" : "Validate my code";
+          });
+        }
+      }
+
       search.addEventListener("input", renderList);
+      window.addEventListener("mathjax-ready", () => typesetMath(document.querySelector(".challenge-content")));
       list.addEventListener("click", (event) => {
         const card = event.target.closest("[data-id]");
         if (card) selectChallenge(card.dataset.id);
