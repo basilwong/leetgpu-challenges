@@ -36,6 +36,12 @@ DEMO_ROOT = REPO_ROOT / "demo"
 TENSOR_PREVIEW_LIMIT = 32
 MAX_SOLUTION_CODE_BYTES = 100_000
 SOLUTION_TIMEOUT_SECONDS = 15
+DEMO_CHALLENGE_IDS = (
+    "medium/110_gae_reverse_scan",
+    "easy/107_ppo_clipped_surrogate_loss",
+    "easy/108_dpo_sequence_loss",
+    "easy/109_grpo_surrogate_loss",
+)
 RUN_LOCK = threading.Lock()
 
 
@@ -78,20 +84,24 @@ def challenge_name(challenge_file: Path) -> str:
 
 
 def discover_challenges() -> dict[str, ChallengeInfo]:
-    """Return all challenge definitions that exist in this checkout."""
-    challenges: dict[str, ChallengeInfo] = {}
+    """Return the four RL challenge definitions in their intended showcase order."""
+    discovered: dict[str, ChallengeInfo] = {}
     for challenge_file in sorted(CHALLENGES_ROOT.glob("*/*/challenge.py")):
         difficulty = challenge_file.parent.parent.name
         directory_name = challenge_file.parent.name
         challenge_id = f"{difficulty}/{directory_name}"
-        challenges[challenge_id] = ChallengeInfo(
+        discovered[challenge_id] = ChallengeInfo(
             challenge_id=challenge_id,
             difficulty=difficulty,
             directory_name=directory_name,
             name=challenge_name(challenge_file),
             path=challenge_file,
         )
-    return challenges
+    return {
+        challenge_id: discovered[challenge_id]
+        for challenge_id in DEMO_CHALLENGE_IDS
+        if challenge_id in discovered
+    }
 
 
 def load_challenge(challenge: ChallengeInfo) -> Any:
@@ -555,8 +565,14 @@ def main() -> None:
     args = parser.parse_args()
 
     challenges = discover_challenges()
-    if not challenges:
-        parser.error(f"No challenge.py files found under {CHALLENGES_ROOT}")
+    missing_challenges = [
+        challenge_id for challenge_id in DEMO_CHALLENGE_IDS if challenge_id not in challenges
+    ]
+    if missing_challenges:
+        parser.error(
+            "This demo requires the GAE, PPO, DPO, and GRPO challenges. Missing: "
+            + ", ".join(missing_challenges)
+        )
 
     server = ThreadingHTTPServer((args.host, args.port), DemoRequestHandler)
     server.challenges = challenges  # type: ignore[attr-defined]

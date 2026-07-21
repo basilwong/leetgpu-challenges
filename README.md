@@ -20,9 +20,8 @@ python -m pip install -r scripts/requirements.txt
 python scripts/serve_cpu_demo.py
 ```
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The playground automatically
-discovers every `challenges/*/*/challenge.py` file in the checkout, so it includes
-any challenges added by the combined branch.
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The playground is intentionally
+limited to the combined branch's four RL challenges: GAE, PPO, DPO, and GRPO.
 
 ## Challenge Structure
 
