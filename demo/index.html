@@ -4,6 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>LeetGPU CPU Playground</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/hint/show-hint.min.css" />
     <style>
       :root {
         color-scheme: dark;
@@ -71,6 +75,17 @@
       .solution-panel h3 { margin-bottom: 7px; }
       .solution-panel p { color: var(--muted); font-size: .9rem; line-height: 1.5; }
       .code-editor { width: 100%; min-height: 320px; resize: vertical; padding: 14px; color: #e2e9fb; background: #090d15; border: 1px solid #26334b; border-radius: 7px; tab-size: 4; font: .83rem/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .CodeMirror { height: 380px; border: 1px solid #405276; border-radius: 7px; font: .86rem/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .CodeMirror-focused { border-color: #7898ff; box-shadow: 0 0 0 2px #314a8266; }
+      .CodeMirror pre { margin: 0; padding: 0; overflow: visible; color: inherit; background: transparent; border: 0; border-radius: 0; font: inherit; }
+      .CodeMirror-gutters { border-right-color: #2b3952; background: #101724; }
+      .CodeMirror-linenumber { color: #71809a; }
+      .CodeMirror-activeline-background { background: #1c273b; }
+      .CodeMirror-matchingbracket { color: #e8edf7 !important; background: #3e629e; border-radius: 2px; }
+      .CodeMirror-hints { color: var(--text); background: #101724; border-color: #405276; }
+      .CodeMirror-hint-active { background: #3a5690; }
+      .editor-shortcuts { margin: 10px 0 0 !important; font-size: .8rem !important; }
+      kbd { padding: 2px 5px; border: 1px solid #435373; border-radius: 4px; color: #d9e4ff; background: #202b40; font: .78rem ui-monospace, SFMono-Regular, Menlo, monospace; }
       .validation-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 12px; }
       .validation-result { min-height: 22px; margin: 0; color: var(--muted); font-size: .9rem; white-space: pre-wrap; }
       .validation-result.success { color: var(--success); }
@@ -93,6 +108,17 @@
         .validation-footer { align-items: flex-start; flex-direction: column; }
       }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/selection/active-line.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/comment/comment.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/searchcursor.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/search.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/hint/show-hint.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/hint/anyword-hint.min.js"></script>
     <script>
       window.MathJax = {
         tex: {
@@ -108,7 +134,6 @@
     <header>
       <div>
         <h1>LeetGPU RL playground</h1>
-        <p class="subtitle">Explore GAE, PPO, DPO, and GRPO locally without a GPU or a LeetGPU account.</p>
       </div>
       <span class="cpu-badge">CPU-only reference runs</span>
     </header>
@@ -126,7 +151,7 @@
       </section>
     </main>
     <script>
-      const state = { challenges: [], activeId: null, detail: null, solutions: {} };
+      const state = { challenges: [], activeId: null, detail: null, solutions: {}, editor: null };
       const content = document.querySelector("#content");
       const list = document.querySelector("#challenge-list");
       const count = document.querySelector("#count");
@@ -153,8 +178,58 @@
       }
 
       function saveActiveSolution() {
+        if (state.editor) {
+          state.editor.save();
+          if (state.activeId) state.solutions[state.activeId] = state.editor.getValue();
+          return;
+        }
         const editor = document.querySelector("#solution-code");
         if (editor && state.activeId) state.solutions[state.activeId] = editor.value;
+      }
+
+      function disposeSolutionEditor() {
+        if (!state.editor) return;
+        state.editor.toTextArea();
+        state.editor = null;
+      }
+
+      function createSolutionEditor(textarea) {
+        if (!window.CodeMirror) {
+          textarea.addEventListener("input", saveActiveSolution);
+          return;
+        }
+        state.editor = window.CodeMirror.fromTextArea(textarea, {
+          mode: "python",
+          theme: "material-darker",
+          lineNumbers: true,
+          lineWrapping: false,
+          indentUnit: 4,
+          tabSize: 4,
+          indentWithTabs: false,
+          smartIndent: true,
+          styleActiveLine: true,
+          matchBrackets: true,
+          autoCloseBrackets: true,
+          autofocus: true,
+          extraKeys: {
+            "Tab": (editor) => {
+              if (editor.somethingSelected()) editor.indentSelection("add");
+              else editor.replaceSelection(" ".repeat(editor.getOption("indentUnit")), "end");
+            },
+            "Shift-Tab": (editor) => editor.indentSelection("subtract"),
+            "Ctrl-Space": (editor) => editor.showHint({ hint: window.CodeMirror.hint.anyword, completeSingle: false }),
+            "Cmd-Space": (editor) => editor.showHint({ hint: window.CodeMirror.hint.anyword, completeSingle: false }),
+            "Ctrl-/": "toggleComment",
+            "Cmd-/": "toggleComment",
+            "Ctrl-F": "findPersistent",
+            "Cmd-F": "findPersistent",
+            "Ctrl-Enter": () => validateSolution(),
+            "Cmd-Enter": () => validateSolution(),
+            "Ctrl-S": () => saveActiveSolution(),
+            "Cmd-S": () => saveActiveSolution()
+          }
+        });
+        state.editor.on("change", saveActiveSolution);
       }
 
       function filteredChallenges() {
@@ -194,7 +269,8 @@
           <section class="solution-panel">
             <h3>PyTorch solution</h3>
             <p>Define <code>solve(...)</code> with the provided signature. Validation runs every functional test on CPU in a local child process with a 15-second limit. Only run code you trust.</p>
-            <textarea id="solution-code" class="code-editor" spellcheck="false" aria-label="PyTorch solution code"></textarea>
+            <textarea id="solution-code" class="code-editor" spellcheck="false" autocapitalize="off" autocorrect="off" aria-label="PyTorch solution code"></textarea>
+            <p class="editor-shortcuts"><kbd>Tab</kbd> indent <kbd>Shift+Tab</kbd> unindent <kbd>Ctrl/Cmd+/</kbd> comment <kbd>Ctrl/Cmd+Space</kbd> autocomplete <kbd>Ctrl/Cmd+Enter</kbd> validate</p>
             <div class="validation-footer">
               <p id="validation-result" class="validation-result">Edit the starter, then validate against the functional test suite.</p>
               <button id="validate-solution-bottom" class="run-button validate-button">Validate my code</button>
@@ -204,7 +280,7 @@
         `;
         const editor = document.querySelector("#solution-code");
         editor.value = state.solutions[state.activeId] ?? detail.starter_code;
-        editor.addEventListener("input", saveActiveSolution);
+        createSolutionEditor(editor);
         document.querySelector("#run-example").addEventListener("click", runExample);
         document.querySelector("#validate-solution").addEventListener("click", validateSolution);
         document.querySelector("#validate-solution-bottom").addEventListener("click", validateSolution);
@@ -213,6 +289,7 @@
 
       async function selectChallenge(id) {
         saveActiveSolution();
+        disposeSolutionEditor();
         state.activeId = id;
         state.detail = null;
         renderList();
@@ -270,7 +347,7 @@
           const response = await fetch(`/api/challenges/${encodedId(state.activeId)}/validate`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ code: editor.value })
+            body: JSON.stringify({ code: state.editor ? state.editor.getValue() : editor.value })
           });
           const result = await response.json();
           if (!response.ok) throw new Error(result.error || "Validation could not start.");
