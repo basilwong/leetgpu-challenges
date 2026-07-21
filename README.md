@@ -6,6 +6,22 @@ This is the challenge set for [LeetGPU.com](https://leetgpu.com). We welcome con
 
 Each challenge includes problem descriptions, reference implementation, test cases, and starter templates for multiple GPU programming frameworks.
 
+## Local CPU Demo
+
+The repository includes a small browser playground for exploring the challenges in the
+currently checked-out branch. It runs only a challenge's example case through its
+PyTorch reference implementation on your CPU; it does not submit code, contact the
+LeetGPU service, or run the large performance tests.
+
+```bash
+python -m pip install -r scripts/requirements.txt
+python scripts/serve_cpu_demo.py
+```
+
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The playground automatically
+discovers every `challenges/*/*/challenge.py` file in the checkout, so it includes
+any challenges added by the combined branch.
+
 ## Challenge Structure
 
 Each challenge contains:
@@ -23,3 +39,18 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on contributing new challe
 This problem set is licensed under [CC BY‑NC‑ND 4.0 license](LICENSE).
 
 © 2025 AlphaGPU, LLC. Commercial use, redistribution, or derivative use is prohibited.
+
+## Local Testing
+
+Start the CPU playground from the repository root:
+
+```bash
+python -m pip install -r scripts/requirements.txt
+python scripts/serve_cpu_demo.py
+```
+
+In another terminal, run a smoke test for Vector Addition:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/challenges/easy%2F1_vector_add/run-example
+```

@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LeetGPU CPU Playground</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --canvas: #0a0d14;
+        --panel: #111722;
+        --panel-strong: #171f2e;
+        --border: #29354b;
+        --text: #e8edf7;
+        --muted: #98a5ba;
+        --accent: #7c9cff;
+        --accent-strong: #a8b9ff;
+        --success: #7ce1bc;
+        --danger: #ff9e9e;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+      body { margin: 0; min-width: 320px; background: var(--canvas); color: var(--text); }
+      button, input { font: inherit; }
+      button { cursor: pointer; }
+      header {
+        display: flex; align-items: center; justify-content: space-between; gap: 24px;
+        padding: 24px max(28px, calc((100vw - 1460px) / 2)); border-bottom: 1px solid var(--border);
+        background: linear-gradient(110deg, #101828, #0a0d14 58%);
+      }
+      h1, h2, h3, p { margin-top: 0; }
+      h1 { margin-bottom: 8px; font-size: clamp(1.4rem, 2.7vw, 2.2rem); }
+      h2 { font-size: 1.35rem; }
+      h3 { font-size: 1rem; color: var(--accent-strong); }
+      .subtitle, .muted { color: var(--muted); }
+      .cpu-badge, .tag {
+        display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 10px;
+        font-size: .78rem; font-weight: 700; letter-spacing: .03em;
+      }
+      .cpu-badge { background: #143b33; color: var(--success); border: 1px solid #286a5b; white-space: nowrap; }
+      main { display: grid; grid-template-columns: minmax(250px, 330px) minmax(0, 1fr); max-width: 1460px; margin: auto; min-height: calc(100vh - 109px); }
+      aside { padding: 20px; border-right: 1px solid var(--border); }
+      .search { width: 100%; padding: 11px 12px; color: var(--text); background: #0c111b; border: 1px solid var(--border); border-radius: 8px; }
+      .count { margin: 14px 2px 10px; color: var(--muted); font-size: .86rem; }
+      .challenge-list { display: grid; gap: 7px; max-height: calc(100vh - 205px); overflow-y: auto; padding-right: 3px; }
+      .challenge-card { width: 100%; padding: 11px 12px; text-align: left; color: var(--text); background: transparent; border: 1px solid transparent; border-radius: 8px; }
+      .challenge-card:hover { background: var(--panel); border-color: var(--border); }
+      .challenge-card.active { background: #1d2a46; border-color: #5574ca; }
+      .challenge-card .name { display: block; margin-bottom: 5px; font-weight: 650; }
+      .challenge-card .meta { color: var(--muted); font-size: .8rem; }
+      .easy { background: #143b33; color: var(--success); }
+      .medium { background: #423415; color: #ffcf70; }
+      .hard { background: #432033; color: #ff9ec9; }
+      .content { min-width: 0; padding: clamp(22px, 4vw, 48px); }
+      .empty { max-width: 650px; padding: 25px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+      .detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 22px; margin-bottom: 24px; }
+      .source { margin: 7px 0 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; }
+      .run-button { padding: 11px 15px; border: 1px solid #7794f8; border-radius: 8px; color: #06102a; background: var(--accent-strong); font-weight: 800; white-space: nowrap; }
+      .run-button:hover { background: #c0cbff; }
+      .run-button:disabled { cursor: wait; opacity: .7; }
+      .notice { min-height: 22px; margin-bottom: 15px; color: var(--muted); font-size: .9rem; }
+      .notice.success { color: var(--success); }
+      .notice.error { color: var(--danger); }
+      .results { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-bottom: 30px; }
+      .result-panel { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+      pre { margin: 0; padding: 12px; overflow: auto; color: #d7e0f6; background: #090d15; border: 1px solid #202a3c; border-radius: 7px; font: .78rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .challenge-content { line-height: 1.65; color: #d9e0ed; }
+      .challenge-content h2 { margin: 28px 0 10px; color: var(--accent-strong); }
+      .challenge-content code { padding: 2px 5px; border-radius: 4px; background: #202a3c; color: #cfdbff; }
+      .challenge-content pre { white-space: pre-wrap; }
+      .challenge-content a { color: var(--accent-strong); }
+      .challenge-content li { margin: 6px 0; }
+      @media (max-width: 800px) {
+        header { padding: 18px 20px; align-items: flex-start; }
+        main { display: block; }
+        aside { border-right: 0; border-bottom: 1px solid var(--border); }
+        .challenge-list { max-height: 255px; }
+        .content { padding: 25px 20px; }
+        .detail-header { display: block; }
+        .run-button { margin-top: 14px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>LeetGPU local playground</h1>
+        <p class="subtitle">Explore this checkout and run reference examples without a GPU or a LeetGPU account.</p>
+      </div>
+      <span class="cpu-badge">CPU-only reference runs</span>
+    </header>
+    <main>
+      <aside>
+        <input id="search" class="search" type="search" placeholder="Filter challenges…" aria-label="Filter challenges" />
+        <p id="count" class="count">Loading challenges…</p>
+        <div id="challenge-list" class="challenge-list" aria-live="polite"></div>
+      </aside>
+      <section id="content" class="content" aria-live="polite">
+        <div class="empty">
+          <h2>Loading the checked-out challenges…</h2>
+          <p class="muted">The browser app discovers challenge definitions from the branch you started it from.</p>
+        </div>
+      </section>
+    </main>
+    <script>
+      const state = { challenges: [], activeId: null, detail: null };
+      const content = document.querySelector("#content");
+      const list = document.querySelector("#challenge-list");
+      const count = document.querySelector("#count");
+      const search = document.querySelector("#search");
+
+      const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (character) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;"
+      }[character]));
+      const encodedId = (id) => encodeURIComponent(id);
+
+      function filteredChallenges() {
+        const term = search.value.trim().toLowerCase();
+        return state.challenges.filter((challenge) => !term || [challenge.name, challenge.id, challenge.difficulty]
+          .join(" ").toLowerCase().includes(term));
+      }
+
+      function renderList() {
+        const challenges = filteredChallenges();
+        count.textContent = `${challenges.length} of ${state.challenges.length} challenges in this checkout`;
+        list.innerHTML = challenges.map((challenge) => `
+          <button class="challenge-card ${challenge.id === state.activeId ? "active" : ""}" data-id="${escapeHtml(challenge.id)}">
+            <span class="name">${escapeHtml(challenge.name)}</span>
+            <span class="meta"><span class="tag ${escapeHtml(challenge.difficulty)}">${escapeHtml(challenge.difficulty)}</span> ${escapeHtml(challenge.id.split("/")[1])}</span>
+          </button>
+        `).join("") || '<p class="muted">No matching challenges.</p>';
+      }
+
+      function renderDetail() {
+        const detail = state.detail;
+        if (!detail) return;
+        content.innerHTML = `
+          <div class="detail-header">
+            <div>
+              <span class="tag ${escapeHtml(detail.difficulty)}">${escapeHtml(detail.difficulty)}</span>
+              <h2 style="margin: 10px 0 0">${escapeHtml(detail.name)}</h2>
+              <p class="source">${escapeHtml(detail.source_path)}</p>
+            </div>
+            <button id="run-example" class="run-button">Run CPU example</button>
+          </div>
+          <p id="notice" class="notice">Runs <code>generate_example_test()</code> and <code>reference_impl()</code> locally. Large functional and performance tests are not run.</p>
+          <div id="results"></div>
+          <article class="challenge-content">${detail.description_html}</article>
+        `;
+        document.querySelector("#run-example").addEventListener("click", runExample);
+      }
+
+      async function selectChallenge(id) {
+        state.activeId = id;
+        state.detail = null;
+        renderList();
+        content.innerHTML = '<div class="empty"><h2>Loading challenge…</h2></div>';
+        try {
+          const response = await fetch(`/api/challenges/${encodedId(id)}`);
+          if (!response.ok) throw new Error("Could not load this challenge.");
+          state.detail = await response.json();
+          renderDetail();
+        } catch (error) {
+          content.innerHTML = `<div class="empty"><h2>Unable to load challenge</h2><p class="muted">${escapeHtml(error.message)}</p></div>`;
+        }
+      }
+
+      async function runExample() {
+        const button = document.querySelector("#run-example");
+        const notice = document.querySelector("#notice");
+        const results = document.querySelector("#results");
+        button.disabled = true;
+        button.textContent = "Running…";
+        notice.className = "notice";
+        notice.textContent = "Running the reference implementation on cpu…";
+        results.innerHTML = "";
+        try {
+          const response = await fetch(`/api/challenges/${encodedId(state.activeId)}/run-example`, { method: "POST" });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || "The example did not run.");
+          notice.className = "notice success";
+          notice.textContent = `Completed on ${result.device} in ${result.elapsed_ms} ms. ${result.execution_note}`;
+          results.innerHTML = `
+            <section class="result-panel"><h3>Example inputs</h3><pre>${escapeHtml(JSON.stringify(result.inputs, null, 2))}</pre></section>
+            <section class="result-panel"><h3>Reference output</h3><pre>${escapeHtml(JSON.stringify(result.outputs, null, 2))}</pre></section>
+          `;
+        } catch (error) {
+          notice.className = "notice error";
+          notice.textContent = error.message;
+        } finally {
+          button.disabled = false;
+          button.textContent = "Run CPU example";
+        }
+      }
+
+      search.addEventListener("input", renderList);
+      list.addEventListener("click", (event) => {
+        const card = event.target.closest("[data-id]");
+        if (card) selectChallenge(card.dataset.id);
+      });
+
+      async function initialize() {
+        try {
+          const response = await fetch("/api/challenges");
+          if (!response.ok) throw new Error("Challenge inventory was unavailable.");
+          state.challenges = (await response.json()).challenges;
+          renderList();
+          if (state.challenges.length) selectChallenge(state.challenges[0].id);
+        } catch (error) {
+          content.innerHTML = `<div class="empty"><h2>Unable to start the playground</h2><p class="muted">${escapeHtml(error.message)}</p></div>`;
+        }
+      }
+      initialize();
+    </script>
+  </body>
+</html>
