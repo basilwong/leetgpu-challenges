@@ -96,7 +96,7 @@
     <script>
       window.MathJax = {
         tex: {
-          inlineMath: [["\\(", "\\)"], ["$", "$"]],
+          inlineMath: [["\\(", "\\)"]],
           displayMath: [["\\[", "\\]"], ["$$", "$$"]]
         },
         startup: { typeset: false }
@@ -136,6 +136,15 @@
         "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;"
       }[character]));
       const encodedId = (id) => encodeURIComponent(id);
+
+      function normalizeMathJaxText(html) {
+        // Challenge descriptions use plain underscores inside \text{...} for
+        // the website renderer. MathJax enters text mode there, where an
+        // underscore must be escaped to remain a literal identifier character.
+        return html.replace(/\\text\{([^{}]*)\}/g, (_match, text) =>
+          `\\text{${text.replace(/(^|[^\\])_/g, "$1\\_")}}`
+        );
+      }
 
       function typesetMath(element) {
         if (!element || typeof window.MathJax?.typesetPromise !== "function") return;
@@ -191,7 +200,7 @@
               <button id="validate-solution-bottom" class="run-button validate-button">Validate my code</button>
             </div>
           </section>
-          <article class="challenge-content">${detail.description_html}</article>
+          <article class="challenge-content">${normalizeMathJaxText(detail.description_html)}</article>
         `;
         const editor = document.querySelector("#solution-code");
         editor.value = state.solutions[state.activeId] ?? detail.starter_code;
